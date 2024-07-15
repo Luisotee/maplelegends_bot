@@ -122,7 +122,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/serverStatus - Show the current server status\n"
         "/watchServerStatus - Toggle server status notifications on/off\n"
         "/getStats <CharacterName> - Get stats and avatar for a specific character\n"
-        "/getCash <id> - Get the amount of vote cash for a given user ID\n"
+        "/getCash <id> - Get the amount of vote cash for a given user ID. You can learn about how to get the id in https://github.com/Luisotee/maplelegends_bot\n"
         "/watchCash <your_maplelegends_id> - Toggle daily cash updates on/off\n"
         "/help - Show this help message\n"
     )
@@ -190,6 +190,8 @@ def load_cash_watchers():
     if os.path.exists(CASH_WATCHERS_FILE):
         with open(CASH_WATCHERS_FILE, "r") as f:
             cash_watchers = json.load(f)
+    else:
+        cash_watchers = {}
 
 
 def save_cash_watchers():
@@ -198,8 +200,8 @@ def save_cash_watchers():
 
 
 async def watch_cash(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Toggle cash watching for the user."""
-    user_id = update.effective_user.id
+    """Add or remove a MapleLegendsID from the user's watch list."""
+    user_id = str(update.effective_user.id)
     args = context.args
 
     if not args:
@@ -208,26 +210,40 @@ async def watch_cash(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     maplelegends_id = args[0]
 
-    if str(user_id) in cash_watchers:
-        del cash_watchers[str(user_id)]
+    if user_id not in cash_watchers:
+        cash_watchers[user_id] = []
+
+    if maplelegends_id in cash_watchers[user_id]:
+        cash_watchers[user_id].remove(maplelegends_id)
         await update.message.reply_text(
-            "You will no longer receive daily cash updates."
+            f"You will no longer receive daily cash updates for ID: {maplelegends_id}"
         )
     else:
-        cash_watchers[str(user_id)] = maplelegends_id
-        await update.message.reply_text("You will now receive daily cash updates.")
+        cash_watchers[user_id].append(maplelegends_id)
+        await update.message.reply_text(
+            f"You will now receive daily cash updates for ID: {maplelegends_id}"
+        )
+
+    if not cash_watchers[user_id]:
+        del cash_watchers[user_id]
 
     save_cash_watchers()
 
 
 async def send_daily_cash_updates(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send daily cash updates to watching users."""
-    for user_id, maplelegends_id in cash_watchers.items():
+    for user_id, maplelegends_ids in cash_watchers.items():
+        message = "Your current Vote Cash amounts:\n"
+        for maplelegends_id in maplelegends_ids:
+            try:
+                cash_amount = await get_cash_amount(maplelegends_id)
+                message += f"ID {maplelegends_id}: {cash_amount}\n"
+            except Exception as e:
+                logger.error(f"Error getting cash for user {maplelegends_id}: {str(e)}")
+                message += f"ID {maplelegends_id}: Error fetching data\n"
+
         try:
-            cash_amount = await get_cash_amount(maplelegends_id)
-            await context.bot.send_message(
-                chat_id=user_id, text=f"Your current Vote Cash amount: {cash_amount}"
-            )
+            await context.bot.send_message(chat_id=user_id, text=message)
         except Exception as e:
             logger.error(f"Error sending cash update to user {user_id}: {str(e)}")
 
@@ -306,9 +322,9 @@ def runTelegramBot(shared_count_param, count_lock_param) -> None:
     # Set up job to check server status every minute
     application.job_queue.run_repeating(check_server_status, interval=60)
 
-    # Set up job to send daily cash updates at 12 AM UTC
+    # Set up job to send daily cash updates at 12 PM UTC
     application.job_queue.run_daily(
-        send_daily_cash_updates, time=time(hour=0, minute=0, tzinfo=pytz.UTC)
+        send_daily_cash_updates, time=time(hour=12, minute=6, tzinfo=pytz.UTC)
     )
     # Run the bot until the user presses Ctrl-C
     application.run_polling(allowed_updates=Update.ALL_TYPES)
