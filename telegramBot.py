@@ -324,7 +324,7 @@ def runTelegramBot(shared_count_param, count_lock_param) -> None:
 
     # Set up job to send daily cash updates at 12 PM UTC
     application.job_queue.run_daily(
-        send_daily_cash_updates, time=time(hour=12, minute=6, tzinfo=pytz.UTC)
+        send_daily_cash_updates, time=time(hour=12, minute=0, tzinfo=pytz.UTC)
     )
     # Run the bot until the user presses Ctrl-C
     application.run_polling(allowed_updates=Update.ALL_TYPES)
