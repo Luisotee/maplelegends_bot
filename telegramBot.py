@@ -226,12 +226,12 @@ async def watch_cash(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if existing_entry:
         cash_watchers[user_id].remove(existing_entry)
         await update.message.reply_text(
-            f"You will no longer receive daily cash updates for {username})"
+            f"You will no longer receive daily cash updates for {username}"
         )
     else:
         cash_watchers[user_id].append({"id": maplelegends_id, "username": username})
         await update.message.reply_text(
-            f"You will now receive daily cash updates for {username})"
+            f"You will now receive daily cash updates for {username}"
         )
 
     if not cash_watchers[user_id]:
