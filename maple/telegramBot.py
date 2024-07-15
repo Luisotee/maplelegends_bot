@@ -19,7 +19,6 @@ import pytz
 
 load_dotenv()
 
-
 # Enable logging
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
@@ -71,14 +70,12 @@ async def watch_server_status(
 
 
 async def check_server_status(context: ContextTypes.DEFAULT_TYPE) -> None:
-    print("Checking server status")
     """Check server status and notify users if necessary."""
     global is_server_offline
     with count_lock:
         count = shared_count.value
 
     if count < 10 and not is_server_offline:
-        print("Server is offline")
         is_server_offline = True
         for user_id in watching_users:
             await context.bot.send_message(
