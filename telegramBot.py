@@ -210,18 +210,28 @@ async def watch_cash(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     maplelegends_id = args[0]
 
+    try:
+        username, cash_amount = await get_cash_amount(maplelegends_id)
+    except Exception as e:
+        await update.message.reply_text(f"Error fetching data: {str(e)}")
+        return
+
     if user_id not in cash_watchers:
         cash_watchers[user_id] = []
 
-    if maplelegends_id in cash_watchers[user_id]:
-        cash_watchers[user_id].remove(maplelegends_id)
+    existing_entry = next(
+        (item for item in cash_watchers[user_id] if item["id"] == maplelegends_id), None
+    )
+
+    if existing_entry:
+        cash_watchers[user_id].remove(existing_entry)
         await update.message.reply_text(
-            f"You will no longer receive daily cash updates for ID: {maplelegends_id}"
+            f"You will no longer receive daily cash updates for {username})"
         )
     else:
-        cash_watchers[user_id].append(maplelegends_id)
+        cash_watchers[user_id].append({"id": maplelegends_id, "username": username})
         await update.message.reply_text(
-            f"You will now receive daily cash updates for ID: {maplelegends_id}"
+            f"You will now receive daily cash updates for {username})"
         )
 
     if not cash_watchers[user_id]:
@@ -234,13 +244,20 @@ async def send_daily_cash_updates(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send daily cash updates to watching users."""
     for user_id, maplelegends_ids in cash_watchers.items():
         message = "Your current Vote Cash amounts:\n"
-        for maplelegends_id in maplelegends_ids:
+        for entry in maplelegends_ids:
+            maplelegends_id = entry["id"]
+            stored_username = entry["username"]
             try:
-                cash_amount = await get_cash_amount(maplelegends_id)
-                message += f"ID {maplelegends_id}: {cash_amount}\n"
+                username, cash_amount = await get_cash_amount(maplelegends_id)
+                message += f"{username}: {cash_amount}\n"
+                if username != stored_username:
+                    entry["username"] = username
+                    save_cash_watchers()
             except Exception as e:
                 logger.error(f"Error getting cash for user {maplelegends_id}: {str(e)}")
-                message += f"ID {maplelegends_id}: Error fetching data\n"
+                message += (
+                    f"{stored_username} (ID {maplelegends_id}): Error fetching data\n"
+                )
 
         try:
             await context.bot.send_message(chat_id=user_id, text=message)
@@ -249,7 +266,7 @@ async def send_daily_cash_updates(context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def get_cash_amount(user_id):
-    """Helper function to get cash amount."""
+    """Helper function to get cash amount and username."""
     url = "https://maplelegends.com/my/account"
     headers = {
         "accept": "*/*",
@@ -264,11 +281,16 @@ async def get_cash_amount(user_id):
 
     soup = BeautifulSoup(response.text, "html.parser")
     vote_cash_element = soup.select_one('div.col-md-6:contains("Vote Cash:") b')
+    username_element = soup.select_one(
+        "ul.nav.navbar-nav.pull-right li.visible-md.visible-lg a.spa"
+    )
 
-    if vote_cash_element:
-        return vote_cash_element.text.strip()
+    if vote_cash_element and username_element:
+        return username_element.text.strip(), vote_cash_element.text.strip()
     else:
-        raise ValueError(f"Unable to find Vote Cash information for user ID {user_id}")
+        raise ValueError(
+            f"Unable to find Vote Cash or username information for user ID {user_id}"
+        )
 
 
 async def get_cash(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -282,8 +304,8 @@ async def get_cash(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = context.args[0]
 
     try:
-        vote_cash = await get_cash_amount(user_id)
-        await update.message.reply_text(f"Vote Cash amount: {vote_cash}")
+        username, vote_cash = await get_cash_amount(user_id)
+        await update.message.reply_text(f"Vote Cash amount for {username}: {vote_cash}")
     except ValueError as e:
         await update.message.reply_text(str(e))
     except Exception as e:
