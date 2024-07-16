@@ -16,7 +16,7 @@ import logging
 import json
 import os
 from bs4 import BeautifulSoup
-from datetime import time
+from datetime import datetime, time
 import pytz
 
 load_dotenv()
@@ -197,6 +197,24 @@ async def get_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(f"Error fetching character data: {str(e)}")
 
 
+def schedule_cash_updates(context: ContextTypes.DEFAULT_TYPE):
+    # Remove all existing cash update jobs
+    for job in context.job_queue.get_jobs_by_name("cash_update"):
+        job.schedule_removal()
+
+    # Schedule new jobs for each user and each of their watched accounts
+    for user_id, accounts in cash_watchers.items():
+        for account in accounts:
+            update_time = datetime.strptime(account["update_time"], "%H:%M").time()
+            context.job_queue.run_daily(
+                send_cash_update,
+                time=update_time,
+                chat_id=user_id,
+                name="cash_update",
+                data=account,
+            )
+
+
 def save_cash_watchers():
     with open(CASH_WATCHERS_FILE, "w") as f:
         json.dump(cash_watchers, f)
@@ -206,14 +224,25 @@ async def watch_cash(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     user_id = str(update.effective_user.id)
     args = context.args
 
-    if not args:
-        await update.message.reply_text("Usage: /watchCash <your_maplelegends_id>")
+    if len(args) < 2:
+        await update.message.reply_text(
+            "Usage: /watchCash <HH:MM> <your_maplelegends_id>"
+        )
         return
 
-    maplelegends_id = args[0]
+    update_time = args[0]
+    maplelegends_id = args[1]
+
+    # Validate time format
+    try:
+        datetime.strptime(update_time, "%H:%M")
+    except ValueError:
+        await update.message.reply_text("Invalid time format. Please use HH:MM.")
+        return
 
     try:
-        username, cash_amount = await get_cash_amount(maplelegends_id)
+        async with aiohttp.ClientSession() as session:
+            username, cash_amount = await get_cash_amount(maplelegends_id, session)
     except Exception as e:
         await update.message.reply_text(f"Error fetching data: {str(e)}")
         return
@@ -226,53 +255,55 @@ async def watch_cash(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     )
 
     if existing_entry:
-        cash_watchers[user_id].remove(existing_entry)
+        existing_entry["update_time"] = update_time
         await update.message.reply_text(
-            f"You will no longer receive daily cash updates for {username}"
+            f"Updated: You will receive daily cash updates for {username} at {update_time} UTC"
         )
     else:
         cash_watchers[user_id].append(
-            {"id": maplelegends_id, "username": username, "last_cash": cash_amount}
+            {
+                "id": maplelegends_id,
+                "username": username,
+                "last_cash": cash_amount,
+                "update_time": update_time,
+            }
         )
         await update.message.reply_text(
-            f"You will now receive daily cash updates for {username}"
+            f"You will now receive daily cash updates for {username} at {update_time} UTC"
         )
 
-    if not cash_watchers[user_id]:
-        del cash_watchers[user_id]
+    save_cash_watchers()
+    schedule_cash_updates(context)
+
+
+async def send_cash_update(context: ContextTypes.DEFAULT_TYPE) -> None:
+    job = context.job
+    user_id = job.chat_id
+    account = job.data
+
+    maplelegends_id = account["id"]
+    stored_username = account["username"]
+    last_cash = account.get("last_cash", 0)
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            username, cash_amount = await get_cash_amount(maplelegends_id, session)
+        difference = cash_amount - last_cash
+        message = f"Vote Cash update for {username}: {cash_amount:,} ({difference:+,} since last check)"
+
+        # Update the stored cash amount
+        account["last_cash"] = cash_amount
+        account["username"] = username
+    except Exception as e:
+        logger.error(f"Error getting cash for user {maplelegends_id}: {str(e)}")
+        message = f"Error fetching data for {stored_username} (ID {maplelegends_id})"
+
+    try:
+        await context.bot.send_message(chat_id=user_id, text=message)
+    except Exception as e:
+        logger.error(f"Error sending cash update to user {user_id}: {str(e)}")
 
     save_cash_watchers()
-
-
-async def send_daily_cash_updates(context: ContextTypes.DEFAULT_TYPE) -> None:
-    for user_id, maplelegends_ids in cash_watchers.items():
-        message = "Your current Vote Cash amounts:\n"
-        for entry in maplelegends_ids:
-            maplelegends_id = entry["id"]
-            stored_username = entry["username"]
-            last_cash = entry.get("last_cash", 0)  # Use 0 if last_cash is not present
-            try:
-                username, cash_amount = await get_cash_amount(maplelegends_id)
-                difference = cash_amount - last_cash
-                message += (
-                    f"{username}: {cash_amount:,} ({difference:+,} since last check)\n"
-                )
-
-                # Update the stored cash amount
-                entry["last_cash"] = cash_amount
-                entry["username"] = username
-            except Exception as e:
-                logger.error(f"Error getting cash for user {maplelegends_id}: {str(e)}")
-                message += (
-                    f"{stored_username} (ID {maplelegends_id}): Error fetching data\n"
-                )
-
-        try:
-            await context.bot.send_message(chat_id=user_id, text=message)
-        except Exception as e:
-            logger.error(f"Error sending cash update to user {user_id}: {str(e)}")
-
-    save_cash_watchers()  # Save the updated cash_watchers after processing all users
 
 
 async def get_cash_amount(user_id, session):
@@ -424,12 +455,11 @@ def runTelegramBot(shared_count_param, count_lock_param) -> None:
     application.add_handler(CommandHandler("updateCash", handle_update_cash))
     application.add_handler(MessageHandler(filters.TEXT, invalid_command))
 
+    # Schedule cash updates
+    schedule_cash_updates(application)
+
     # Set up job to check server status every minute
     application.job_queue.run_repeating(check_server_status, interval=60)
 
-    # Set up job to send daily cash updates at 20 PM UTC
-    application.job_queue.run_daily(
-        send_daily_cash_updates, time=time(hour=20, minute=0, tzinfo=pytz.UTC)
-    )
     # Run the bot until the user presses Ctrl-C
     application.run_polling(allowed_updates=Update.ALL_TYPES)
