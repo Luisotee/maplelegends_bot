@@ -11,13 +11,15 @@ This Telegram bot provides various functionalities for MapleLegends players, inc
 
 ## Commands
 
-- `/start`: Start the bot and receive a welcome message
-- `/help`: Show the help message with available commands
-- `/serverStatus`: Display the current number of players on the server and indicate whether the server is active or inactive
-- `/watchServerStatus`: Toggle server status notifications on/off (Tells you when the server is offline and when it's back online)
-- `/getStats <CharacterName>`: Get stats and avatar for a specific character
-- `/getCash <id>`: Get the amount of vote cash for a given user ID
-- `/watchCash <your_maplelegends_id>`: Toggle daily cash updates on/off
+- `/start` - Start the bot and receive a welcome message
+- `/serverStatus` - Show the current server status
+- `/watchServerStatus` - Toggle server status notifications on/off (tells you when the server is offline and when it's back online)
+- `/getStats <CharacterName>` - Get stats and avatar for a specific character
+- `/getCash <id>` - Get the amount of vote cash for a given user ID. You can learn about how to get the id in the end of this document
+- `/watchCash <HH:MM> <your_maplelegends_id>` - Daily updates of your vote cash amount at `<HH:MM>` UTC
+- `/removeCashWatcher <username>` - Remove a specific cash watcher
+- `/updateCash` - Get an immediate update of cash amounts for all your registered accounts
+- `/help` - Show this help message
 
 ## Usage
 
