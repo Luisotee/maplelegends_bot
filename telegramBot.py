@@ -1,4 +1,6 @@
+import asyncio
 import time
+import aiohttp
 from dotenv import load_dotenv
 import pytz
 import requests
@@ -273,7 +275,7 @@ async def send_daily_cash_updates(context: ContextTypes.DEFAULT_TYPE) -> None:
     save_cash_watchers()  # Save the updated cash_watchers after processing all users
 
 
-async def get_cash_amount(user_id):
+async def get_cash_amount(user_id, session):
     """Helper function to get cash amount and username."""
     url = "https://maplelegends.com/my/account"
     headers = {
@@ -284,10 +286,11 @@ async def get_cash_amount(user_id):
         "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
     }
 
-    response = requests.get(url, headers=headers)
-    response.raise_for_status()
+    async with session.get(url, headers=headers) as response:
+        response.raise_for_status()
+        text = await response.text()
 
-    soup = BeautifulSoup(response.text, "html.parser")
+    soup = BeautifulSoup(text, "html.parser")
     vote_cash_element = soup.select_one('div.col-md-6:-soup-contains("Vote Cash:") b')
     username_element = soup.select_one(
         "ul.nav.navbar-nav.pull-right li.visible-md.visible-lg a.spa"
@@ -330,29 +333,64 @@ async def update_cash(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         )
         return
 
-    message = "Current Vote Cash amounts:\n"
-    for entry in cash_watchers[user_id]:
-        maplelegends_id = entry["id"]
-        stored_username = entry["username"]
-        last_cash = entry.get("last_cash", 0)
-        try:
-            username, cash_amount = await get_cash_amount(maplelegends_id)
-            difference = cash_amount - last_cash
-            message += (
-                f"{username}: {cash_amount:,} ({difference:+,} since last check)\n"
-            )
+    # Send an initial message
+    message = await update.message.reply_text("Fetching cash amounts...")
 
-            # Update the stored cash amount
-            entry["last_cash"] = cash_amount
-            entry["username"] = username
-        except Exception as e:
-            logger.error(f"Error getting cash for user {maplelegends_id}: {str(e)}")
-            message += (
-                f"{stored_username} (ID {maplelegends_id}): Error fetching data\n"
-            )
 
-    await update.message.reply_text(message)
+async def update_cash(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = str(update.effective_user.id)
+
+    if user_id not in cash_watchers or not cash_watchers[user_id]:
+        await update.message.reply_text(
+            "You haven't registered any accounts to watch. Use /watchCash to add accounts."
+        )
+        return
+
+    # Send an initial message
+    message = await update.message.reply_text("Fetching cash amounts...")
+
+    async def fetch_cash(entry):
+        async with aiohttp.ClientSession() as session:
+            maplelegends_id = entry["id"]
+            stored_username = entry["username"]
+            last_cash = entry.get("last_cash", 0)
+            try:
+                async with aiohttp.ClientSession() as session:
+                    username, cash_amount = await get_cash_amount(
+                        maplelegends_id, session
+                    )
+                difference = cash_amount - last_cash
+                result = (
+                    f"{username}: {cash_amount:,} ({difference:+,} since last check)\n"
+                )
+                entry["last_cash"] = cash_amount
+                entry["username"] = username
+                return result
+            except Exception as e:
+                logger.error(f"Error getting cash for user {maplelegends_id}: {str(e)}")
+                return (
+                    f"{stored_username} (ID {maplelegends_id}): Error fetching data\n"
+                )
+
+    # Create tasks for all cash fetching operations
+    tasks = [fetch_cash(entry) for entry in cash_watchers[user_id]]
+
+    # Run all tasks concurrently
+    results = await asyncio.gather(*tasks)
+
+    # Combine results
+    result_message = "Current Vote Cash amounts:\n" + "".join(results)
+
+    # Update the message with the results
+    await message.edit_text(result_message)
     save_cash_watchers()  # Save the updated cash amounts
+
+
+# Modify your command handler to use create_task
+async def handle_update_cash(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    asyncio.create_task(update_cash(update, context))
 
 
 def runTelegramBot(shared_count_param, count_lock_param) -> None:
@@ -382,7 +420,7 @@ def runTelegramBot(shared_count_param, count_lock_param) -> None:
     application.add_handler(CommandHandler("getCash", get_cash))
     application.add_handler(CommandHandler("watchCash", watch_cash))
     application.add_handler(CommandHandler("serverStatus", server_status))
-    application.add_handler(CommandHandler("updateCash", update_cash))
+    application.add_handler(CommandHandler("updateCash", handle_update_cash))
     application.add_handler(MessageHandler(filters.TEXT, invalid_command))
 
     # Set up job to check server status every minute
