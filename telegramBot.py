@@ -44,6 +44,15 @@ def load_watching_users():
             watching_users = set(json.load(f))
 
 
+def load_cash_watchers():
+    global cash_watchers
+    if os.path.exists(CASH_WATCHERS_FILE):
+        with open(CASH_WATCHERS_FILE, "r") as f:
+            cash_watchers = json.load(f)
+    else:
+        cash_watchers = {}
+
+
 def save_watching_users():
     with open(USERS_FILE, "w") as f:
         json.dump(list(watching_users), f)
@@ -185,22 +194,12 @@ async def get_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(f"Error fetching character data: {str(e)}")
 
 
-def load_cash_watchers():
-    global cash_watchers
-    if os.path.exists(CASH_WATCHERS_FILE):
-        with open(CASH_WATCHERS_FILE, "r") as f:
-            cash_watchers = json.load(f)
-    else:
-        cash_watchers = {}
-
-
 def save_cash_watchers():
     with open(CASH_WATCHERS_FILE, "w") as f:
         json.dump(cash_watchers, f)
 
 
 async def watch_cash(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Add or remove a MapleLegendsID from the user's watch list."""
     user_id = str(update.effective_user.id)
     args = context.args
 
@@ -229,7 +228,9 @@ async def watch_cash(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             f"You will no longer receive daily cash updates for {username}"
         )
     else:
-        cash_watchers[user_id].append({"id": maplelegends_id, "username": username})
+        cash_watchers[user_id].append(
+            {"id": maplelegends_id, "username": username, "last_cash": cash_amount}
+        )
         await update.message.reply_text(
             f"You will now receive daily cash updates for {username}"
         )
@@ -241,18 +242,22 @@ async def watch_cash(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def send_daily_cash_updates(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Send daily cash updates to watching users."""
     for user_id, maplelegends_ids in cash_watchers.items():
         message = "Your current Vote Cash amounts:\n"
         for entry in maplelegends_ids:
             maplelegends_id = entry["id"]
             stored_username = entry["username"]
+            last_cash = entry.get("last_cash", 0)  # Use 0 if last_cash is not present
             try:
                 username, cash_amount = await get_cash_amount(maplelegends_id)
-                message += f"{username}: {cash_amount}\n"
-                if username != stored_username:
-                    entry["username"] = username
-                    save_cash_watchers()
+                difference = cash_amount - last_cash
+                message += (
+                    f"{username}: {cash_amount:,} ({difference:+,} since last check)\n"
+                )
+
+                # Update the stored cash amount
+                entry["last_cash"] = cash_amount
+                entry["username"] = username
             except Exception as e:
                 logger.error(f"Error getting cash for user {maplelegends_id}: {str(e)}")
                 message += (
@@ -263,6 +268,8 @@ async def send_daily_cash_updates(context: ContextTypes.DEFAULT_TYPE) -> None:
             await context.bot.send_message(chat_id=user_id, text=message)
         except Exception as e:
             logger.error(f"Error sending cash update to user {user_id}: {str(e)}")
+
+    save_cash_watchers()  # Save the updated cash_watchers after processing all users
 
 
 async def get_cash_amount(user_id):
@@ -280,13 +287,14 @@ async def get_cash_amount(user_id):
     response.raise_for_status()
 
     soup = BeautifulSoup(response.text, "html.parser")
-    vote_cash_element = soup.select_one('div.col-md-6:contains("Vote Cash:") b')
+    vote_cash_element = soup.select_one('div.col-md-6:-soup-contains("Vote Cash:") b')
     username_element = soup.select_one(
         "ul.nav.navbar-nav.pull-right li.visible-md.visible-lg a.spa"
     )
 
     if vote_cash_element and username_element:
-        return username_element.text.strip(), vote_cash_element.text.strip()
+        cash_amount = vote_cash_element.text.strip().replace(",", "")
+        return username_element.text.strip(), int(float(cash_amount))
     else:
         raise ValueError(
             f"Unable to find Vote Cash or username information for user ID {user_id}"
@@ -346,7 +354,7 @@ def runTelegramBot(shared_count_param, count_lock_param) -> None:
 
     # Set up job to send daily cash updates at 12 PM UTC
     application.job_queue.run_daily(
-        send_daily_cash_updates, time=time(hour=12, minute=0, tzinfo=pytz.UTC)
+        send_daily_cash_updates, time=time(hour=3, minute=18, tzinfo=pytz.UTC)
     )
     # Run the bot until the user presses Ctrl-C
     application.run_polling(allowed_updates=Update.ALL_TYPES)
