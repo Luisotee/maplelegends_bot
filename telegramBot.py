@@ -316,7 +316,8 @@ async def get_cash(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = context.args[0]
 
     try:
-        username, vote_cash = await get_cash_amount(user_id)
+        async with aiohttp.ClientSession() as session:
+            username, vote_cash = await get_cash_amount(user_id, session)
         await update.message.reply_text(f"Vote Cash amount for {username}: {vote_cash}")
     except ValueError as e:
         await update.message.reply_text(str(e))
