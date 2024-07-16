@@ -1,7 +1,8 @@
-from multiprocessing import Value
 import threading
-import requests
 import time
+from multiprocessing import Value
+
+import requests
 
 from telegramBot import runTelegramBot
 
