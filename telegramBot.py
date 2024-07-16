@@ -134,7 +134,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/watchServerStatus - Toggle server status notifications on/off\n"
         "/getStats <CharacterName> - Get stats and avatar for a specific character\n"
         "/getCash <id> - Get the amount of vote cash for a given user ID. You can learn about how to get the id in https://github.com/Luisotee/maplelegends_bot\n"
-        "/watchCash <your_maplelegends_id> - Toggle daily cash updates on/off\n"
+        "/watchCash <HH:MM> <your_maplelegends_id> - Daily updates of your vote cash amount at <HH:MM> UTC\n"
+        "/removeCashWatcher <username> - Remove a specific cash watcher\n"
         "/updateCash - Get an immediate update of cash amounts for all your registered accounts\n"
         "/help - Show this help message\n"
     )
@@ -195,6 +196,37 @@ async def get_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     except requests.exceptions.RequestException as e:
         await update.message.reply_text(f"Error fetching character data: {str(e)}")
+
+
+async def remove_cash_watcher(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    user_id = str(update.effective_user.id)
+    args = context.args
+
+    if len(args) < 1:
+        await update.message.reply_text("Usage: /removeCashWatcher <username>")
+        return
+
+    username_to_remove = args[0]
+
+    if user_id not in cash_watchers or not cash_watchers[user_id]:
+        await update.message.reply_text("You don't have any registered cash watchers.")
+        return
+
+    for entry in cash_watchers[user_id]:
+        if entry["username"].lower() == username_to_remove.lower():
+            cash_watchers[user_id].remove(entry)
+            save_cash_watchers()
+            schedule_cash_updates(context)
+            await update.message.reply_text(
+                f"Successfully removed cash watcher for {entry['username']}."
+            )
+            return
+
+    await update.message.reply_text(
+        f"No cash watcher found for username: {username_to_remove}"
+    )
 
 
 def schedule_cash_updates(context: ContextTypes.DEFAULT_TYPE):
@@ -453,6 +485,7 @@ def runTelegramBot(shared_count_param, count_lock_param) -> None:
     application.add_handler(CommandHandler("watchCash", watch_cash))
     application.add_handler(CommandHandler("serverStatus", server_status))
     application.add_handler(CommandHandler("updateCash", handle_update_cash))
+    application.add_handler(CommandHandler("removeCashWatcher", remove_cash_watcher))
     application.add_handler(MessageHandler(filters.TEXT, invalid_command))
 
     # Schedule cash updates
