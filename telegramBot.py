@@ -133,6 +133,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/getStats <CharacterName> - Get stats and avatar for a specific character\n"
         "/getCash <id> - Get the amount of vote cash for a given user ID. You can learn about how to get the id in https://github.com/Luisotee/maplelegends_bot\n"
         "/watchCash <your_maplelegends_id> - Toggle daily cash updates on/off\n"
+        "/updateCash - Get an immediate update of cash amounts for all your registered accounts\n"
         "/help - Show this help message\n"
     )
     await update.message.reply_text(help_text)
@@ -320,6 +321,40 @@ async def get_cash(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(f"Error fetching data: {str(e)}")
 
 
+async def update_cash(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = str(update.effective_user.id)
+
+    if user_id not in cash_watchers or not cash_watchers[user_id]:
+        await update.message.reply_text(
+            "You haven't registered any accounts to watch. Use /watchCash to add accounts."
+        )
+        return
+
+    message = "Current Vote Cash amounts:\n"
+    for entry in cash_watchers[user_id]:
+        maplelegends_id = entry["id"]
+        stored_username = entry["username"]
+        last_cash = entry.get("last_cash", 0)
+        try:
+            username, cash_amount = await get_cash_amount(maplelegends_id)
+            difference = cash_amount - last_cash
+            message += (
+                f"{username}: {cash_amount:,} ({difference:+,} since last check)\n"
+            )
+
+            # Update the stored cash amount
+            entry["last_cash"] = cash_amount
+            entry["username"] = username
+        except Exception as e:
+            logger.error(f"Error getting cash for user {maplelegends_id}: {str(e)}")
+            message += (
+                f"{stored_username} (ID {maplelegends_id}): Error fetching data\n"
+            )
+
+    await update.message.reply_text(message)
+    save_cash_watchers()  # Save the updated cash amounts
+
+
 def runTelegramBot(shared_count_param, count_lock_param) -> None:
     global shared_count, count_lock
     shared_count = shared_count_param
@@ -347,14 +382,15 @@ def runTelegramBot(shared_count_param, count_lock_param) -> None:
     application.add_handler(CommandHandler("getCash", get_cash))
     application.add_handler(CommandHandler("watchCash", watch_cash))
     application.add_handler(CommandHandler("serverStatus", server_status))
+    application.add_handler(CommandHandler("updateCash", update_cash))
     application.add_handler(MessageHandler(filters.TEXT, invalid_command))
 
     # Set up job to check server status every minute
     application.job_queue.run_repeating(check_server_status, interval=60)
 
-    # Set up job to send daily cash updates at 12 PM UTC
+    # Set up job to send daily cash updates at 20 PM UTC
     application.job_queue.run_daily(
-        send_daily_cash_updates, time=time(hour=3, minute=18, tzinfo=pytz.UTC)
+        send_daily_cash_updates, time=time(hour=20, minute=0, tzinfo=pytz.UTC)
     )
     # Run the bot until the user presses Ctrl-C
     application.run_polling(allowed_updates=Update.ALL_TYPES)
