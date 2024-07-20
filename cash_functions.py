@@ -58,17 +58,73 @@ def schedule_cash_updates(context: ContextTypes.DEFAULT_TYPE):
     for job in context.job_queue.get_jobs_by_name("cash_update"):
         job.schedule_removal()
 
-    # Schedule new jobs for each user and each of their watched accounts
+    # Create a dictionary to group accounts by update time
+    update_times = {}
+
+    # Group accounts by update time
     for user_id, accounts in cash_watchers.items():
         for account in accounts:
-            update_time = datetime.strptime(account["update_time"], "%H:%M").time()
-            context.job_queue.run_daily(
-                send_cash_update,
-                time=update_time,
-                chat_id=user_id,
-                name="cash_update",
-                data=account,
-            )
+            update_time = account["update_time"]
+            if update_time not in update_times:
+                update_times[update_time] = []
+            update_times[update_time].append((user_id, account))
+
+    # Schedule new jobs for each update time
+    for update_time, accounts in update_times.items():
+        time = datetime.strptime(update_time, "%H:%M").time()
+        context.job_queue.run_daily(
+            send_grouped_cash_update,
+            time=time,
+            name="cash_update",
+            data=accounts,
+        )
+
+
+async def send_grouped_cash_update(context: ContextTypes.DEFAULT_TYPE) -> None:
+    job = context.job
+    accounts = job.data
+
+    async def fetch_cash(user_id, account):
+        maplelegends_id = account["id"]
+        stored_username = account["username"]
+        last_cash = account.get("last_cash", 0)
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                username, cash_amount = await get_cash_amount(maplelegends_id, session)
+            difference = cash_amount - last_cash
+            message = f"{username}: {cash_amount:,} ({difference:+,} since last check)"
+
+            # Update the stored cash amount
+            account["last_cash"] = cash_amount
+            account["username"] = username
+        except Exception as e:
+            logger.error(f"Error getting cash for user {maplelegends_id}: {str(e)}")
+            message = f"{stored_username} (ID {maplelegends_id}): Error fetching data"
+
+        return user_id, message
+
+    # Fetch cash for all accounts concurrently
+    results = await asyncio.gather(
+        *[fetch_cash(user_id, account) for user_id, account in accounts]
+    )
+
+    # Group results by user_id
+    grouped_results = {}
+    for user_id, message in results:
+        if user_id not in grouped_results:
+            grouped_results[user_id] = []
+        grouped_results[user_id].append(message)
+
+    # Send grouped messages to each user
+    for user_id, messages in grouped_results.items():
+        full_message = "Vote Cash update:\n" + "\n".join(messages)
+        try:
+            await context.bot.send_message(chat_id=user_id, text=full_message)
+        except Exception as e:
+            logger.error(f"Error sending cash update to user {user_id}: {str(e)}")
+
+    save_cash_watchers()
 
 
 def save_cash_watchers():
